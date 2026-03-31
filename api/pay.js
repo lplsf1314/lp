@@ -1,91 +1,104 @@
-import { createHash } from 'crypto';
-import request from 'request-promise';
+// api/pay.js
+const crypto = require('crypto');
+const fetch = require('node-fetch');
 
+// 微信支付配置（从Vercel环境变量读取，安全不泄露）
+const WX_CONFIG = {
+  appid: process.env.WX_APPID,
+  mch_id: process.env.WX_MCH_ID,
+  key: process.env.WX_KEY,
+  notify_url: 'https://lp-blush.vercel.app/api/notify'
+};
+
+// 主函数
 export default async function handler(req, res) {
+  // 只允许POST请求
   if (req.method !== 'POST') {
     return res.status(405).end('Method Not Allowed');
   }
 
-  const WX_CONFIG = {
-    appid: process.env.WX_APPID,
-    mch_id: process.env.WX_MCH_ID,
-    key: process.env.WX_KEY,
-    notify_url: 'https://lp-blush.vercel.app/api/notify'
-  };
-
-  const { total_fee = 1, body = '测试商品', openid } = req.body;
-
-  if (!openid) {
-    return res.status(400).json({ error: '缺少 openid' });
-  }
-
-  const nonce_str = Math.random().toString(36).substr(2, 15);
-  const out_trade_no = 'LP' + Date.now();
-  const params = {
-    appid: WX_CONFIG.appid,
-    mch_id: WX_CONFIG.mch_id,
-    nonce_str,
-    body,
-    out_trade_no,
-    total_fee,
-    spbill_create_ip: '127.0.0.1',
-    notify_url: WX_CONFIG.notify_url,
-    trade_type: 'JSAPI',
-    openid
-  };
-
-  const signStr = Object.keys(params)
-    .sort()
-    .map(k => `${k}=${params[k]}`)
-    .join('&') + `&key=${WX_CONFIG.key}`;
-  const sign = createHash('md5').update(signStr).digest('hex').toUpperCase();
-  params.sign = sign;
-
-  const xml = Object.entries(params)
-    .map(([k, v]) => `<${k}>${v}</${k}>`)
-    .join('');
-  const xmlData = `<xml>${xml}</xml>`;
-
   try {
-    const resultXml = await request({
-      url: 'https://api.mch.weixin.qq.com/pay/unifiedorder',
-      method: 'POST',
-      body: xmlData,
-      headers: { 'Content-Type': 'application/xml' }
-    });
+    // 解析请求数据
+    const { openid, total_fee = 1, body = '测试商品' } = req.body;
 
-    const result = {};
-    resultXml.replace(/<(\w+)>([^<]+)<\/\1>/g, (_, k, v) => result[k] = v);
-
-    if (result.return_code !== 'SUCCESS' || result.result_code !== 'SUCCESS') {
-      return res.status(500).json({ error: result.return_msg || result.err_code_des });
+    // 校验openid
+    if (!openid) {
+      return res.status(400).json({ error: '缺少 openid' });
     }
 
-    const timeStamp = String(Math.floor(Date.now() / 1000));
-    const nonceStr = Math.random().toString(36).substr(2, 15);
-    const packageStr = `prepay_id=${result.prepay_id}`;
-    const paySignParams = {
-      appId: WX_CONFIG.appid,
-      timeStamp,
-      nonceStr,
-      package: packageStr,
+    // 1. 生成随机字符串
+    const nonce_str = Math.random().toString(36).substr(2, 15);
+
+    // 2. 统一下单参数
+    const out_trade_no = 'LP' + Date.now();
+    const params = {
+      appid: WX_CONFIG.appid,
+      mch_id: WX_CONFIG.mch_id,
+      nonce_str: nonce_str,
+      body: body,
+      out_trade_no: out_trade_no,
+      total_fee: total_fee,
+      spbill_create_ip: '127.0.0.1',
+      notify_url: WX_CONFIG.notify_url,
+      trade_type: 'JSAPI',
+      openid: openid
+    };
+
+    // 3. 生成签名
+    const signStr = Object.keys(params)
+      .sort()
+      .filter(k => params[k] && k !== 'sign')
+      .map(k => `${k}=${params[k]}`)
+      .join('&') + `&key=${WX_CONFIG.key}`;
+    const sign = crypto.createHash('md5').update(signStr, 'utf8').digest('hex').toUpperCase();
+    params.sign = sign;
+
+    // 4. 对象转XML
+    const xml = `<xml>${Object.keys(params).map(k => `<${k}>${params[k]}</${k}>`).join('')}</xml>`;
+
+    // 5. 请求微信统一下单接口
+    const orderRes = await fetch('https://api.mch.weixin.qq.com/pay/unifiedorder', {
+      method: 'POST',
+      body: xml,
+      headers: { 'Content-Type': 'text/xml' }
+    });
+    const orderData = await orderRes.text();
+
+    // 6. XML转对象
+    const orderResult = {};
+    const reg = /<([^>]+)>([^<]+)<\/\1>/g;
+    let match;
+    while ((match = reg.exec(orderData))) {
+      orderResult[match[1]] = match[2];
+    }
+
+    // 7. 校验下单结果
+    if (orderResult.return_code !== 'SUCCESS' || orderResult.result_code !== 'SUCCESS') {
+      return res.status(400).json({ error: orderResult.err_code_des || '下单失败' });
+    }
+
+    // 8. 生成支付参数
+    const payData = {
+      timeStamp: Math.floor(Date.now() / 1000).toString(),
+      nonceStr: nonce_str,
+      package: `prepay_id=${orderResult.prepay_id}`,
       signType: 'MD5'
     };
 
-    const paySignStr = Object.keys(paySignParams)
+    // 9. 生成支付签名
+    const paySignStr = Object.keys(payData)
       .sort()
-      .map(k => `${k}=${paySignParams[k]}`)
+      .filter(k => payData[k] && k !== 'sign')
+      .map(k => `${k}=${payData[k]}`)
       .join('&') + `&key=${WX_CONFIG.key}`;
-    const paySign = createHash('md5').update(paySignStr).digest('hex').toUpperCase();
+    const paySign = crypto.createHash('md5').update(paySignStr, 'utf8').digest('hex').toUpperCase();
+    payData.paySign = paySign;
 
-    res.json({
-      timeStamp,
-      nonceStr,
-      package: packageStr,
-      signType: 'MD5',
-      paySign
-    });
+    // 10. 返回支付参数给小程序
+    return res.status(200).json(payData);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('支付接口错误：', err);
+    return res.status(500).json({ error: '服务器错误' });
   }
 }
+✅ 操作步骤（绝对零出错）
