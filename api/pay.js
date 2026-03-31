@@ -6,21 +6,19 @@ export default async function handler(req, res) {
     return res.status(405).end('Method Not Allowed');
   }
 
-  // 微信支付配置（请稍后替换成你自己的）
   const WX_CONFIG = {
-    appid: '你的小程序AppID',
-    mch_id: '你的商户号',
-    key: '你的商户API密钥',
+    appid: 'wx2dd9ce9ce54a1ade',
+    mch_id: '1109833725',
+    key: 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6',
     notify_url: 'https://lp-blush.vercel.app/api/notify'
   };
 
-  const { total_fee = 1, body = '测试支付', openid } = req.body;
+  const { total_fee = 1, body = '测试商品', openid } = req.body;
 
   if (!openid) {
     return res.status(400).json({ error: '缺少 openid' });
   }
 
-  // 统一下单
   const nonce_str = Math.random().toString(36).substr(2, 15);
   const out_trade_no = 'LP' + Date.now();
   const params = {
@@ -36,7 +34,6 @@ export default async function handler(req, res) {
     openid
   };
 
-  // 生成签名
   const signStr = Object.keys(params)
     .sort()
     .map(k => `${k}=${params[k]}`)
@@ -44,14 +41,12 @@ export default async function handler(req, res) {
   const sign = createHash('md5').update(signStr).digest('hex').toUpperCase();
   params.sign = sign;
 
-  // 转XML
   const xml = Object.entries(params)
     .map(([k, v]) => `<${k}>${v}</${k}>`)
     .join('');
   const xmlData = `<xml>${xml}</xml>`;
 
   try {
-    // 请求微信接口
     const resultXml = await request({
       url: 'https://api.mch.weixin.qq.com/pay/unifiedorder',
       method: 'POST',
@@ -59,7 +54,6 @@ export default async function handler(req, res) {
       headers: { 'Content-Type': 'application/xml' }
     });
 
-    // 解析XML
     const result = {};
     resultXml.replace(/<(\w+)>([^<]+)<\/\1>/g, (_, k, v) => result[k] = v);
 
@@ -67,7 +61,6 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: result.return_msg || result.err_code_des });
     }
 
-    // 生成小程序支付参数
     const timeStamp = String(Math.floor(Date.now() / 1000));
     const nonceStr = Math.random().toString(36).substr(2, 15);
     const packageStr = `prepay_id=${result.prepay_id}`;
@@ -85,7 +78,6 @@ export default async function handler(req, res) {
       .join('&') + `&key=${WX_CONFIG.key}`;
     const paySign = createHash('md5').update(paySignStr).digest('hex').toUpperCase();
 
-    // 返回给前端
     res.json({
       timeStamp,
       nonceStr,
