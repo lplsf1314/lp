@@ -7,9 +7,9 @@ export default async function handler(req, res) {
   }
 
   const WX_CONFIG = {
-    appid: 'wx2dd9ce9ce54a1ade',
-    mch_id: '1109833725',
-    key: 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6',
+    appid: process.env.WX_APPID,
+    mch_id: process.env.WX_MCH_ID,
+    key: process.env.WX_KEY,
     notify_url: 'https://lp-blush.vercel.app/api/notify'
   };
 
